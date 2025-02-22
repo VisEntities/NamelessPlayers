@@ -4,6 +4,8 @@
  * Full legal terms can be found at https://game4freak.io/eula/
  */
 
+using Newtonsoft.Json;
+using Oxide.Core.Libraries.Covalence;
 using System.Collections.Generic;
 
 namespace Oxide.Plugins
@@ -15,10 +17,67 @@ namespace Oxide.Plugins
         #region Fields
 
         private static NamelessPlayers _plugin;
-        private const string INVISIBLE_NAME = "\u200B";
+        private static Configuration _config;
+
         private Dictionary<ulong, string> _originalNames = new Dictionary<ulong, string>();
 
         #endregion Fields
+
+        #region Configuration
+
+        private class Configuration
+        {
+            [JsonProperty("Version")]
+            public string Version { get; set; }
+
+            [JsonProperty("Name Replacement")]
+            public string NameReplacement { get; set; }
+        }
+
+        protected override void LoadConfig()
+        {
+            base.LoadConfig();
+            _config = Config.ReadObject<Configuration>();
+
+            if (string.Compare(_config.Version, Version.ToString()) < 0)
+                UpdateConfig();
+
+            SaveConfig();
+        }
+
+        protected override void LoadDefaultConfig()
+        {
+            _config = GetDefaultConfig();
+        }
+
+        protected override void SaveConfig()
+        {
+            Config.WriteObject(_config, true);
+        }
+
+        private void UpdateConfig()
+        {
+            PrintWarning("Config changes detected! Updating...");
+
+            Configuration defaultConfig = GetDefaultConfig();
+
+            if (string.Compare(_config.Version, "1.0.0") < 0)
+                _config = defaultConfig;
+
+            PrintWarning("Config update complete! Updated from version " + _config.Version + " to " + Version.ToString());
+            _config.Version = Version.ToString();
+        }
+
+        private Configuration GetDefaultConfig()
+        {
+            return new Configuration
+            {
+                Version = Version.ToString(),
+                NameReplacement = "\u200B"
+            };
+        }
+
+        #endregion Configuration
 
         #region Oxide Hooks
 
@@ -36,6 +95,7 @@ namespace Oxide.Plugins
             }
             _originalNames.Clear();
 
+            _config = null;
             _plugin = null;
         }
 
@@ -59,6 +119,27 @@ namespace Oxide.Plugins
             _originalNames.Remove(player.userID);
         }
 
+        // This hook is exposed by Better Chat plugin (https://umod.org/plugins/better-chat)
+        private Dictionary<string, object> OnBetterChat(Dictionary<string, object> data)
+        {
+            if (data == null || !data.ContainsKey("Player"))
+                return data;
+
+            IPlayer iPlayer = data["Player"] as IPlayer;
+            if (iPlayer == null)
+                return data;
+
+            BasePlayer bp = BasePlayer.FindByID(ulong.Parse(iPlayer.Id));
+            if (bp == null)
+                return data;
+
+            if (PermissionUtil.HasPermission(bp, PermissionUtil.IGNORE))
+                return data;
+
+            data["Username"] = _config.NameReplacement;
+            return data;
+        }
+
         #endregion Oxide Hooks
 
         #region Player Name Obfuscation
@@ -76,7 +157,7 @@ namespace Oxide.Plugins
                 _originalNames.Add(player.userID, player.displayName);
             }
 
-            player.displayName = INVISIBLE_NAME;
+            player.displayName = _config.NameReplacement;
             player.SendNetworkUpdateImmediate();
         }
 
