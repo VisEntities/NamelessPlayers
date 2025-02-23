@@ -10,7 +10,7 @@ using System.Collections.Generic;
 
 namespace Oxide.Plugins
 {
-    [Info("Nameless Players", "VisEntities", "1.0.0")]
+    [Info("Nameless Players", "VisEntities", "1.1.0")]
     [Description("Hides player names, replacing them with a blank or custom text.")]
     public class NamelessPlayers : RustPlugin
     {
@@ -134,7 +134,7 @@ namespace Oxide.Plugins
             if (bp == null)
                 return data;
 
-            if (PermissionUtil.HasPermission(bp, PermissionUtil.IGNORE))
+            if (!PermissionUtil.HasPermission(bp, PermissionUtil.USE))
                 return data;
 
             data["Username"] = _config.NameReplacement;
@@ -150,7 +150,7 @@ namespace Oxide.Plugins
             if (player == null)
                 return;
 
-            if (PermissionUtil.HasPermission(player, PermissionUtil.IGNORE))
+            if (!PermissionUtil.HasPermission(player, PermissionUtil.USE))
                 return;
 
             if (!_originalNames.ContainsKey(player.userID))
@@ -180,10 +180,10 @@ namespace Oxide.Plugins
 
         private static class PermissionUtil
         {
-            public const string IGNORE = "namelessplayers.ignore";
+            public const string USE = "namelessplayers.use";
             private static readonly List<string> _permissions = new List<string>
             {
-                IGNORE,
+                USE,
             };
 
             public static void RegisterPermissions()
