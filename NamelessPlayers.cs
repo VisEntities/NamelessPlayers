@@ -11,7 +11,7 @@ using System.Collections.Generic;
 namespace Oxide.Plugins
 {
     [Info("Nameless Players", "VisEntities", "1.0.0")]
-    [Description(" ")]
+    [Description("Hides player names, replacing them with a blank or custom text.")]
     public class NamelessPlayers : RustPlugin
     {
         #region Fields
@@ -116,6 +116,7 @@ namespace Oxide.Plugins
         {
             if (player == null)
                 return;
+
             _originalNames.Remove(player.userID);
         }
 
