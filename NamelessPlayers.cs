@@ -13,7 +13,7 @@ using System.Linq;
 namespace Oxide.Plugins
 {
     [Info("Nameless Players", "VisEntities", "2.0.0")]
-    [Description("Hides player names by default, allowing players with permission to set custom display names.")]
+    [Description("Hides player names, replacing them with a blank or custom text.")]
     public class NamelessPlayers : RustPlugin
     {
         #region Fields
