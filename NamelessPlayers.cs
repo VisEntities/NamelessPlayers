@@ -12,7 +12,7 @@ using System.Linq;
 
 namespace Oxide.Plugins
 {
-    [Info("Nameless Players", "VisEntities", "2.0.0")]
+    [Info("Nameless Players", "VisEntities", "2.1.0")]
     [Description("Hides player names, replacing them with a blank or custom text.")]
     public class NamelessPlayers : RustPlugin
     {
@@ -23,6 +23,7 @@ namespace Oxide.Plugins
         private static StoredData _storedData;
 
         private Dictionary<ulong, string> _originalNames = new Dictionary<ulong, string>();
+        private Dictionary<ulong, Timer> _pendingTimers = new Dictionary<ulong, Timer>();
 
         #endregion Fields
 
@@ -32,6 +33,9 @@ namespace Oxide.Plugins
         {
             [JsonProperty("Custom Names")]
             public Dictionary<ulong, string> CustomNames { get; set; } = new Dictionary<ulong, string>();
+
+            [JsonProperty("Original Names")]
+            public Dictionary<ulong, string> OriginalNames { get; set; } = new Dictionary<ulong, string>();
         }
 
         private void LoadData()
@@ -190,18 +194,49 @@ namespace Oxide.Plugins
             LoadData();
             PermissionUtil.RegisterPermissions();
 
+            foreach (var kvp in _storedData.OriginalNames)
+            {
+                _originalNames[kvp.Key] = kvp.Value;
+            }
+
             cmd.AddChatCommand("setname", this, nameof(cmdSetName));
             cmd.AddChatCommand("resetname", this, nameof(cmdResetName));
         }
 
         private void Unload()
         {
+            foreach (var kvp in _pendingTimers)
+            {
+                if (kvp.Value != null)
+                    kvp.Value.Destroy();
+            }
+            _pendingTimers.Clear();
+
             foreach (BasePlayer player in BasePlayer.activePlayerList)
             {
-                RestorePlayerName(player);
-            }
-            _originalNames.Clear();
+                if (player == null)
+                    continue;
 
+                string originalName;
+                if (_originalNames.TryGetValue(player.userID, out originalName))
+                {
+                    player.displayName = originalName;
+                    player.SendNetworkUpdateImmediate();
+                }
+                else if (_storedData != null && _storedData.OriginalNames.TryGetValue(player.userID, out originalName))
+                {
+                    player.displayName = originalName;
+                    player.SendNetworkUpdateImmediate();
+                }
+            }
+
+            if (_storedData != null)
+            {
+                _storedData.OriginalNames.Clear();
+                SaveData();
+            }
+
+            _originalNames.Clear();
             _storedData = null;
             _config = null;
             _plugin = null;
@@ -217,7 +252,23 @@ namespace Oxide.Plugins
 
         private void OnPlayerConnected(BasePlayer player)
         {
-            timer.Once(1f, () => ApplyPlayerName(player));
+            if (player == null)
+                return;
+
+            Timer existingTimer;
+            if (_pendingTimers.TryGetValue(player.userID, out existingTimer))
+            {
+                if (existingTimer != null)
+                    existingTimer.Destroy();
+                _pendingTimers.Remove(player.userID);
+            }
+
+            Timer t = timer.Once(1f, () =>
+            {
+                _pendingTimers.Remove(player.userID);
+                ApplyPlayerName(player);
+            });
+            _pendingTimers[player.userID] = t;
         }
 
         private void OnPlayerDisconnected(BasePlayer player, string reason)
@@ -225,7 +276,21 @@ namespace Oxide.Plugins
             if (player == null)
                 return;
 
+            Timer pendingTimer;
+            if (_pendingTimers.TryGetValue(player.userID, out pendingTimer))
+            {
+                if (pendingTimer != null)
+                    pendingTimer.Destroy();
+                _pendingTimers.Remove(player.userID);
+            }
+
             _originalNames.Remove(player.userID);
+
+            if (_storedData != null)
+            {
+                _storedData.OriginalNames.Remove(player.userID);
+                SaveData();
+            }
         }
 
         // This hook is exposed by Better Chat plugin (https://umod.org/plugins/better-chat)
@@ -250,12 +315,70 @@ namespace Oxide.Plugins
             {
                 data["Username"] = customName;
             }
-            else
+            else if (PermissionUtil.HasPermission(bp, PermissionUtil.USE))
             {
                 data["Username"] = _config.NameReplacement;
             }
 
             return data;
+        }
+
+        private void OnUserPermissionGranted(string id, string permName)
+        {
+            if (permName != PermissionUtil.USE)
+                return;
+
+            BasePlayer player = BasePlayer.FindByID(ulong.Parse(id));
+            if (player != null && player.IsConnected)
+                ApplyPlayerName(player);
+        }
+
+        private void OnUserPermissionRevoked(string id, string permName)
+        {
+            if (permName != PermissionUtil.USE)
+                return;
+
+            BasePlayer player = BasePlayer.FindByID(ulong.Parse(id));
+            if (player != null && player.IsConnected)
+                ApplyPlayerName(player);
+        }
+
+        private void OnGroupPermissionGranted(string name, string perm)
+        {
+            if (perm != PermissionUtil.USE)
+                return;
+
+            ReapplyAllPlayerNames();
+        }
+
+        private void OnGroupPermissionRevoked(string name, string perm)
+        {
+            if (perm != PermissionUtil.USE)
+                return;
+
+            ReapplyAllPlayerNames();
+        }
+
+        private void OnUserGroupAdded(string id, string groupName)
+        {
+            BasePlayer player = BasePlayer.FindByID(ulong.Parse(id));
+            if (player != null && player.IsConnected)
+                ApplyPlayerName(player);
+        }
+
+        private void OnUserGroupRemoved(string id, string groupName)
+        {
+            BasePlayer player = BasePlayer.FindByID(ulong.Parse(id));
+            if (player != null && player.IsConnected)
+                ApplyPlayerName(player);
+        }
+
+        private void ReapplyAllPlayerNames()
+        {
+            foreach (BasePlayer player in BasePlayer.activePlayerList)
+            {
+                ApplyPlayerName(player);
+            }
         }
 
         #endregion Oxide Hooks
@@ -267,20 +390,44 @@ namespace Oxide.Plugins
             if (player == null)
                 return;
 
-            if (!_originalNames.ContainsKey(player.userID))
-                _originalNames[player.userID] = player.displayName;
-
             string customName;
             if (_storedData.CustomNames.TryGetValue(player.userID, out customName))
             {
+                if (!_originalNames.ContainsKey(player.userID))
+                {
+                    _originalNames[player.userID] = player.displayName;
+                    _storedData.OriginalNames[player.userID] = player.displayName;
+                    SaveData();
+                }
+
                 player.displayName = customName;
-            }
-            else
-            {
-                player.displayName = _config.NameReplacement;
+                player.SendNetworkUpdateImmediate();
+                return;
             }
 
-            player.SendNetworkUpdateImmediate();
+            if (PermissionUtil.HasPermission(player, PermissionUtil.USE))
+            {
+                if (!_originalNames.ContainsKey(player.userID))
+                {
+                    _originalNames[player.userID] = player.displayName;
+                    _storedData.OriginalNames[player.userID] = player.displayName;
+                    SaveData();
+                }
+
+                player.displayName = _config.NameReplacement;
+                player.SendNetworkUpdateImmediate();
+                return;
+            }
+
+            string originalName;
+            if (_originalNames.TryGetValue(player.userID, out originalName))
+            {
+                player.displayName = originalName;
+                player.SendNetworkUpdateImmediate();
+                _originalNames.Remove(player.userID);
+                _storedData.OriginalNames.Remove(player.userID);
+                SaveData();
+            }
         }
 
         private void RestorePlayerName(BasePlayer player)
@@ -453,11 +600,13 @@ namespace Oxide.Plugins
 
         private static class PermissionUtil
         {
+            public const string USE = "namelessplayers.use";
             public const string SETNAME = "namelessplayers.setname";
             public const string ADMIN = "namelessplayers.admin";
 
             private static readonly List<string> _permissions = new List<string>
             {
+                USE,
                 SETNAME,
                 ADMIN
             };
